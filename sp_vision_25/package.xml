@@ -6,15 +6,21 @@
   <maintainer email="your@email.com">user</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>cmake</buildtool_depend> <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>pb_rm_interfaces</depend>
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>example_interfaces</depend>
+  <depend>rosidl_typesupport_cpp</depend>
+  <build_depend>rosidl_cmake</build_depend>
 
   <export>
-    <build_type>cmake</build_type> </export>
+    <build_type>ament_cmake</build_type>
+  </export>
 </package>

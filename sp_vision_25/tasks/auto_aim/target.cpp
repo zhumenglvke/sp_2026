@@ -189,9 +189,6 @@ void Target::update(const Armor & armor)
 
   if (is_switch_) switch_count_++;
 
-  if (name == ArmorName::outpost && armor_num_ == 3) {
-    id = OUTPOST_BOTTOM_ARMOR_ID;  // 只用最下面那块板更新
-  }
 
   last_id = id;
   update_count_++;
@@ -303,10 +300,7 @@ Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
   auto armor_y = x[2] - r * std::sin(angle);
 
   auto armor_z = x[4];
-  if (name == ArmorName::outpost && armor_num_ == 3) {
-    if (id == 1) armor_z += x[9];
-    if (id == 2) armor_z += x[10];
-  } else if (use_second_radius) {
+    if (use_second_radius) {
     armor_z += x[10];
   }
 
@@ -329,10 +323,7 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 
   auto dz_dl = 0.0;
   auto dz_dh = 0.0;
-  if (name == ArmorName::outpost && armor_num_ == 3) {
-    if (id == 1) dz_dl = 1.0;
-    if (id == 2) dz_dh = 1.0;
-  } else if (use_second_radius) {
+    if (use_second_radius) {
     dz_dh = 1.0;
   }
 

@@ -12,14 +12,10 @@ find_package(Eigen3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
-set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake/")
 find_package(OpenVINO REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)      # 处理 /serial/imu
-set(pb_rm_interfaces_DIR
-  /home/luojiafox/Desktop/pb2025_sentry_ws/install/pb_rm_interfaces/share/pb_rm_interfaces/cmake
-)
 find_package(pb_rm_interfaces REQUIRED)          # 自定义消息
 find_package(tf2 REQUIRED)              # 用于四元数与欧拉角转换
 find_package(tf2_geometry_msgs REQUIRED)
@@ -371,3 +367,24 @@ if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_
 else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()
+
+install(
+  TARGETS sentry_dual_cameras_ros
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY configs
+  DESTINATION share/${PROJECT_NAME}
+)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+  install(
+    DIRECTORY assets
+    DESTINATION share/${PROJECT_NAME}
+  )
+else()
+  message(WARNING "sp_vision assets directory is missing; copy the OpenVINO/ONNX model files before running vision")
+endif()
+
+ament_package()
