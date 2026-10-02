@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <fmt/core.h>
 #include <opencv2/opencv.hpp>
@@ -88,6 +89,11 @@ public:
     if (thread_.joinable()) thread_.join();
   }
 
+  void set_detection_enabled(bool enabled)
+  {
+    detect_enabled_.store(enabled, std::memory_order_relaxed);
+  }
+
   bool latest(DetectPacket & out) const
   {
     std::lock_guard<std::mutex> lk(mtx_);
@@ -114,6 +120,10 @@ private:
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
           continue;
         }
+
+        // Keep draining the camera while inference is paused, so the next
+        // detection starts from a recent frame.
+        if (!detect_enabled_.load(std::memory_order_relaxed)) continue;
 
         const double age_ms =
           std::chrono::duration<double, std::milli>(SteadyClock::now() - ts).count();
@@ -161,6 +171,7 @@ private:
 
   std::thread thread_;
   std::atomic_bool running_{false};
+  std::atomic_bool detect_enabled_{false};
 };
 
 }  // namespace sp_vision

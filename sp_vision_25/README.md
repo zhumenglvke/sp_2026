@@ -179,6 +179,19 @@ assets/
 
 模型相对路径以程序运行目录为基准。通过 ROS 2 启动文件运行时，应确保工作目录或传入的配置路径能够正确定位 `assets/`。
 
+### ROS 2 双相机入口的时序与开火配置
+
+`sentry_dual_cameras_ros` 只处理前摄的新帧，超过 `max_frame_age_ms` 的前后摄结果不会参与控制。前摄断帧超时后会重建 Tracker，并发出一次停火命令；后摄仍按原有的接管等待时间和冷却时间工作。后摄采集与 YOLO 检测在独立线程中运行，只有前摄失去目标且允许接管时才启用后摄推理。
+
+可在 `configs/demo.yaml` 中设置：
+
+- `imu_delay_ms`：前摄帧时间戳与 IMU 姿态查询的固定偏移，默认 2 ms；此值需要结合实际相机和 IMU 时间戳标定。
+- `max_frame_age_ms`：检测结果的最大帧龄，默认 100 ms。
+- 弹速：使用 `GimbalROS` 从 ROS `/BulletSpeed` 更新的值；其回调已经处理异常弹速。
+- `pitch_tolerance_deg`：云台实际俯仰角与瞄准命令角的开火误差上限，默认 2°。启用 `tracking_only_fire` 时，仅 Tracker 处于 `tracking` 状态允许开火；当前帧没有装甲板时也不触发开火。
+- `target_whitelist`：静态目标白名单，名称取自 `ARMOR_NAMES`，例如 `[one, three, sentry, outpost]`。空列表保持原来的敌方颜色和 5 号装甲板过滤规则。该配置同时作用于前、后摄。导航发送的动态目标列表目前没有接到这个 ROS 2 入口。
+- `back_camera_config`：后摄相机配置路径，默认 `configs/cam2.yaml`。
+
 ## 9. 编译方法
 
 本项目使用 zsh。首先进入工作空间并加载 ROS 2 环境：

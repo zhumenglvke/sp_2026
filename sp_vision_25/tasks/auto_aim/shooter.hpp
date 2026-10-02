@@ -34,6 +34,7 @@ public:
 private:
   double first_tolerance_{0.0};
   double second_tolerance_{0.0};
+  double pitch_tolerance_{0.0};
   double judge_distance_{2.0};
   bool auto_fire_{true};
 

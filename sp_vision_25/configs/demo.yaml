@@ -1,6 +1,12 @@
 #enemy_color: "red"
 enemy_color: "blue"
 
+#####-----双相机 ROS 2 入口运行参数-----#####
+imu_delay_ms: 2.0              # 图像时间戳相对 IMU 的固定偏移
+max_frame_age_ms: 100.0        # 超过此帧龄不再使用检测结果
+back_camera_config: configs/cam2.yaml
+target_whitelist: []           # 空列表保持原筛选行为；可填 [one, three, sentry, outpost]
+
 #####-----神经网络参数-----#####
 yolo_name: yolov5
 classify_model: assets/tiny_resnet.onnx
@@ -50,6 +56,7 @@ low_speed_delay_time: 0.030 # s
 #####-----shooter参数-----#####
 auto_fire: true                  # 是否启用自动开火
 tracking_only_fire: true         # 是否只允许在 tracking 状态开火
+pitch_tolerance_deg: 2.0         # 当前俯仰角与命令角的最大开火误差
 
 # 命令平滑容差（degree）
 first_tolerance: 2.0             # 近距离容差

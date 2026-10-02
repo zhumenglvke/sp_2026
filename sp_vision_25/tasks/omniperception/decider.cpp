@@ -2,8 +2,11 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <iterator>
 #include <opencv2/opencv.hpp>
+#include <stdexcept>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -22,6 +25,22 @@ Decider::Decider(const std::string & config_path) : detector_(config_path), coun
   enemy_color_ =
     (yaml["enemy_color"].as<std::string>() == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
   mode_ = yaml["mode"].as<double>();
+
+  if (const auto whitelist = yaml["target_whitelist"]; whitelist) {
+    if (!whitelist.IsSequence()) {
+      throw std::runtime_error("target_whitelist must be a sequence");
+    }
+    for (const auto & item : whitelist) {
+      const auto name = item.as<std::string>();
+      const auto it = std::find(
+        auto_aim::ARMOR_NAMES.begin(), auto_aim::ARMOR_NAMES.end(), name);
+      if (it == auto_aim::ARMOR_NAMES.end()) {
+        throw std::runtime_error("Unknown target_whitelist entry: " + name);
+      }
+      target_whitelist_.push_back(static_cast<auto_aim::ArmorName>(
+        std::distance(auto_aim::ARMOR_NAMES.begin(), it)));
+    }
+  }
 }
 
 io::Command Decider::decide(
@@ -234,6 +253,12 @@ bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 
   // 25赛季没有5号装甲板
   armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });
+  if (!target_whitelist_.empty()) {
+    armors.remove_if([this](const auto_aim::Armor & a) {
+      return std::find(target_whitelist_.begin(), target_whitelist_.end(), a.name) ==
+        target_whitelist_.end();
+    });
+  }
   // 不打工程
   // armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::two; });
   // 不打前哨站
@@ -275,6 +300,12 @@ void Decider::sort(std::vector<DetectionResult> & detection_queue)
     dr.armors.sort(
       [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
   }
+
+  detection_queue.erase(
+    std::remove_if(
+      detection_queue.begin(), detection_queue.end(),
+      [](const DetectionResult & dr) { return dr.armors.empty(); }),
+    detection_queue.end());
 
   // 根据优先级对 DetectionResult 进行排序
   std::sort(
