@@ -43,6 +43,8 @@ min_confidence: 0.8
 min_detect_count: 5
 max_temp_lost_count: 15
 outpost_max_temp_lost_count: 75
+association_position_gate_m: 0.4  # 观测板与预测板的三维位置误差上限，米
+association_yaw_gate_deg: 45.0    # 装甲板朝向误差上限，度
 
 #####-----aimer参数-----#####
 yaw_offset: -1.7 # degree -1.3

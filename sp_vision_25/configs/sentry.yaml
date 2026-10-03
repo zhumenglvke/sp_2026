@@ -66,6 +66,8 @@ can_interface: "can0"
 min_detect_count: 5
 max_temp_lost_count: 25
 outpost_max_temp_lost_count: 75
+association_position_gate_m: 0.4  # 观测板与预测板的三维位置误差上限，米
+association_yaw_gate_deg: 45.0    # 装甲板朝向误差上限，度
 
 #####-----aimer参数-----#####
 yaw_offset: -0.8 # degree -2.5

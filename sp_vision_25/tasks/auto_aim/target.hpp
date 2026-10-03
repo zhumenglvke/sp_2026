@@ -32,6 +32,8 @@ public:
   void predict(std::chrono::steady_clock::time_point t);
   void predict(double dt);
   void update(const Armor & armor);
+  int match_armor_id(const Armor & armor) const;
+  int effective_armor_id(int id) const;
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;

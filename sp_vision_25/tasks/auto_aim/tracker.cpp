@@ -2,6 +2,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
+#include <stdexcept>
 #include <tuple>
 
 #include "tools/logger.hpp"
@@ -27,6 +29,15 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+  association_position_gate_m_ =
+    yaml["association_position_gate_m"] ? yaml["association_position_gate_m"].as<double>() : 0.4;
+  const double yaw_gate_deg =
+    yaml["association_yaw_gate_deg"] ? yaml["association_yaw_gate_deg"].as<double>() : 45.0;
+  association_yaw_gate_rad_ = yaw_gate_deg * CV_PI / 180.0;
+  if (!std::isfinite(association_position_gate_m_) || association_position_gate_m_ <= 0.0 ||
+      !std::isfinite(yaw_gate_deg) || yaw_gate_deg <= 0.0 || yaw_gate_deg > 180.0) {
+    throw std::runtime_error("association gates must be positive and yaw gate must be <= 180 deg");
+  }
 }
 
 std::string Tracker::state() const { return state_; }
@@ -294,6 +305,9 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 
   double best_cost = 1e9;
   Armor * best_armor = nullptr;
+  int best_match_id = -1;
+  double best_position_error = 0.0;
+  double best_yaw_error = 0.0;
 
   // 3. 对每个候选观测进行打分
   for (auto & armor_ref : candidates) {
@@ -304,6 +318,20 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     // 观测的 ypd / yaw
     const auto & obs_ypd = armor.ypd_in_world;
     const auto & obs_yaw = armor.ypr_in_world[0];
+
+    // Target::update() 会再次选择板编号；用相同规则检查它实际要更新的板。
+    const int match_id = target_.effective_armor_id(target_.match_armor_id(armor));
+    const auto & matched_xyza = pred_xyza_list[match_id];
+    const double position_error =
+      (armor.xyz_in_world.head<3>() - matched_xyza.head<3>()).norm();
+    const double yaw_error = std::abs(tools::limit_rad(obs_yaw - matched_xyza[3]));
+    const bool gate_passed = std::isfinite(position_error) && std::isfinite(yaw_error) &&
+      position_error <= association_position_gate_m_ && yaw_error <= association_yaw_gate_rad_;
+    tools::logger()->debug(
+      "[Tracker][Association] plate={} pos={:.3f}/{:.3f}m yaw={:.1f}/{:.1f}deg {}",
+      match_id, position_error, association_position_gate_m_, yaw_error * 180.0 / CV_PI,
+      association_yaw_gate_rad_ * 180.0 / CV_PI, gate_passed ? "pass" : "reject");
+    if (!gate_passed) continue;
 
     double min_cost_this_armor = 1e9;
         // 与预测的每一块装甲板比较，选这个观测最可能对应的那块
@@ -341,10 +369,17 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     if (min_cost_this_armor < best_cost) {
       best_cost = min_cost_this_armor;
       best_armor = &armor;
+      best_match_id = match_id;
+      best_position_error = position_error;
+      best_yaw_error = yaw_error;
     }
   }
 
   if (best_armor == nullptr) return false;
+
+  tools::logger()->debug(
+    "[Tracker][Association] selected plate={} cost={:.3f} pos={:.3f}m yaw={:.1f}deg",
+    best_match_id, best_cost, best_position_error, best_yaw_error * 180.0 / CV_PI);
 
   // 4. 一帧只用一个观测更新 target
   target_.update(*best_armor);

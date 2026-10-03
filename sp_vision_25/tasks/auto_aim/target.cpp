@@ -140,9 +140,9 @@ void Target::predict(double dt)
   ekf_.predict(F, Q, f);
 }
 
-void Target::update(const Armor & armor)
+int Target::match_armor_id(const Armor & armor) const
 {
-  // 装甲板匹配
+  // 在当前预测状态下，按原有规则选择观测对应的装甲板编号。
   int id = 0;
   auto min_angle_error = 1e10;
   const std::vector<Eigen::Vector4d> & xyza_list = armor_xyza_list();
@@ -178,14 +178,25 @@ void Target::update(const Armor & armor)
     }
   }
 
+  return id;
+}
+
+int Target::effective_armor_id(int id) const
+{
+  // 与更新时相同的低角速度切板限制，供关联门限提前判断实际更新的板。
+  if (id != last_id && name != ArmorName::outpost && std::abs(ekf_.x[7]) < 0.8) {
+    return last_id;
+  }
+  return id;
+}
+
+void Target::update(const Armor & armor)
+{
+  int id = match_armor_id(armor);
   if (id != 0) jumped = true;
 
+  id = effective_armor_id(id);
   is_switch_ = (id != last_id);
-  if (is_switch_ && name != ArmorName::outpost && std::abs(ekf_.x[7]) < 0.8) {
-    // 低角速度时尽量不轻易认定为切板
-    id = last_id;
-    is_switch_ = false;
-  }
 
   if (is_switch_) switch_count_++;
 

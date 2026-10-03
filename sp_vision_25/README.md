@@ -192,6 +192,21 @@ assets/
 - `target_whitelist`：静态目标白名单，名称取自 `ARMOR_NAMES`，例如 `[one, three, sentry, outpost]`。空列表保持原来的敌方颜色和 5 号装甲板过滤规则。该配置同时作用于前、后摄。导航发送的动态目标列表目前没有接到这个 ROS 2 入口。
 - `back_camera_config`：后摄相机配置路径，默认 `configs/cam2.yaml`。
 
+### 装甲板关联门限与调参
+
+Tracker 在预测目标状态后，只允许与预测装甲板位置及朝向接近的观测更新 EKF。关联门限位于 `tasks/auto_aim/tracker.cpp` 的 `update_target()` 中，先于原有的距离、角度与切板代价评分；所有候选均未通过时，状态机按本帧未匹配处理。`Target::match_armor_id()` 和 `effective_armor_id()` 复用原有选板及低角速度切板规则，使门限检查对应实际更新的板编号。
+
+在运行所使用的 YAML 中设置以下两个参数；未配置时也采用下列默认值。`configs/demo.yaml` 和 `configs/sentry.yaml` 已给出初始值：
+
+```yaml
+association_position_gate_m: 0.4  # 观测板与预测板的三维位置距离上限，米
+association_yaw_gate_deg: 45.0    # 装甲板朝向差上限，度
+```
+
+这些值只是首次回放的起点，不是经过实车标定的最佳门限。使用日志中的 `[Tracker][Association]` 记录查看每个候选的板编号、位置误差、朝向误差及 `pass/reject` 结果；`selected` 行标出最终用于更新的观测。先用已知正确目标和明显错误目标的录像分别统计误差：若正确目标常被拒绝，适度放宽对应门限；若错误目标被接纳，收紧门限。应覆盖远近距离、快速运动、遮挡后重现和切板场景，并观察 `tracking` 与 `temp_lost` 是否频繁切换。每次只改一个参数并回放同一批录像，确认误拒绝率和错误关联率的变化后再实车验证。远距离位姿误差明显增大时，可进一步按目标距离分段设置门限。
+
+此门限只作用于已有目标的观测关联；目标处于 `lost` 时，`set_target()` 仍按原有规则初始化。前摄未通过关联门限但检测列表非空时，`front_has_detection` 仍可能为真；要确保暂时丢失目标时不继续开火，运行配置应保持 `tracking_only_fire: true`。
+
 ## 9. 编译方法
 
 本项目使用 zsh。首先进入工作空间并加载 ROS 2 环境：
