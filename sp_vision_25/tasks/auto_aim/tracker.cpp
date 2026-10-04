@@ -255,8 +255,16 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
     });
   }
 
-  auto & armor = armors.front();
-  solver_.solve(armor);
+  Armor * selected_armor = nullptr;
+  for (auto & candidate : armors) {
+    if (solver_.solve(candidate)) {
+      selected_armor = &candidate;
+      break;
+    }
+  }
+  if (selected_armor == nullptr) return false;
+
+  auto & armor = *selected_armor;
 
   // 根据兵种优化初始化参数
   auto is_balance = (armor.type == ArmorType::big) &&
@@ -308,12 +316,15 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   int best_match_id = -1;
   double best_position_error = 0.0;
   double best_yaw_error = 0.0;
+  double best_reprojection_error = 0.0;
 
   // 3. 对每个候选观测进行打分
   for (auto & armor_ref : candidates) {
     auto & armor = armor_ref.get();
 
-    solver_.solve(armor);
+    if (!solver_.solve(armor)) {
+      continue;
+    }
 
     // 观测的 ypd / yaw
     const auto & obs_ypd = armor.ypd_in_world;
@@ -321,6 +332,10 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 
     // Target::update() 会再次选择板编号；用相同规则检查它实际要更新的板。
     const int match_id = target_.effective_armor_id(target_.match_armor_id(armor));
+    if (match_id < 0 || match_id >= static_cast<int>(pred_xyza_list.size())) {
+      tools::logger()->debug("[Tracker][Association] reject invalid plate id={}", match_id);
+      continue;
+    }
     const auto & matched_xyza = pred_xyza_list[match_id];
     const double position_error =
       (armor.xyz_in_world.head<3>() - matched_xyza.head<3>()).norm();
@@ -351,7 +366,9 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
       double cost_view = std::abs(tools::limit_rad(obs_ypd[0] - pred_ypd[0]));
       double cost_pitch = std::abs(tools::limit_rad(obs_ypd[1] - pred_ypd[1]));
 
-      double cost = 2.0 * cost_dist + 1.5 * cost_yaw + 1.0 * cost_view;
+      // 通过 PnP 硬门限后的重投影误差继续作为轻量质量项，优先使用几何拟合更好的框。
+      double cost = 2.0 * cost_dist + 1.5 * cost_yaw + 1.0 * cost_view +
+                    0.05 * armor.pnp_reprojection_error_px;
 
       if (target_.name == ArmorName::outpost) {
         // 下板筛选时提高 pitch 权重，避免误把中板/上板当下板
@@ -372,14 +389,17 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
       best_match_id = match_id;
       best_position_error = position_error;
       best_yaw_error = yaw_error;
+      best_reprojection_error = armor.pnp_reprojection_error_px;
     }
   }
 
   if (best_armor == nullptr) return false;
 
   tools::logger()->debug(
-    "[Tracker][Association] selected plate={} cost={:.3f} pos={:.3f}m yaw={:.1f}deg",
-    best_match_id, best_cost, best_position_error, best_yaw_error * 180.0 / CV_PI);
+    "[Tracker][Association] selected plate={} cost={:.3f} pos={:.3f}m yaw={:.1f}deg "
+    "reprojection={:.2f}px",
+    best_match_id, best_cost, best_position_error, best_yaw_error * 180.0 / CV_PI,
+    best_reprojection_error);
 
   // 4. 一帧只用一个观测更新 target
   target_.update(*best_armor);

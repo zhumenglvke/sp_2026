@@ -60,7 +60,8 @@ namespace auto_aim
       return false;
     }
 
-    if (!aimer.debug_aim_point.valid)
+    const auto &shot_candidate = aimer.shot_candidate();
+    if (!shot_candidate.valid || !shot_candidate.trajectory_converged)
     {
       last_command_ = command;
       return false;
@@ -85,7 +86,8 @@ namespace auto_aim
     const double tolerance = base_tolerance * 1.5;
 
     const double spin_speed = std::abs(target.ekf_x()[7]);
-    const double selected_delta_angle = std::abs(aimer.debug_selected_delta_angle);
+    // 使用子弹预计到达时的装甲面角度，而不是图像采集时的当前面角度。
+    const double selected_delta_angle = std::abs(shot_candidate.view_angle);
 
     // 更激进：高速时仍然区分窗口，但额外再放宽 15%
     const double base_fire_window =
@@ -112,9 +114,10 @@ namespace auto_aim
         distance < judge_distance_ * 0.8 &&
         yaw_error < tolerance * 2.5 && pitch_error < pitch_tolerance_;
 
-    const bool can_shoot =
-        (front_enough && gimbal_following && command_not_too_jump) ||
-        close_range_bonus;
+    // 近距离只放宽云台跟随条件，不能绕过未来命中面的朝向检查。
+    const bool aim_alignment_ok =
+        (gimbal_following && command_not_too_jump) || close_range_bonus;
+    const bool can_shoot = front_enough && aim_alignment_ok;
 
     // tools::logger()->info(
     //   "[Shooter AGG] state={} dist={:.2f} spin={:.2f} delta={:.1f}deg "

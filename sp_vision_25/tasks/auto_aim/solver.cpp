@@ -2,6 +2,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "tools/logger.hpp"
@@ -44,6 +47,19 @@ Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3
   Eigen::Matrix<double, 1, 5> distort_coeffs(distort_coeffs_data.data());
   cv::eigen2cv(camera_matrix, camera_matrix_);
   cv::eigen2cv(distort_coeffs, distort_coeffs_);
+
+  pnp_max_reprojection_error_px_ = yaml["pnp_max_reprojection_error_px"]
+    ? yaml["pnp_max_reprojection_error_px"].as<double>() : 8.0;
+  pnp_min_distance_m_ =
+    yaml["pnp_min_distance_m"] ? yaml["pnp_min_distance_m"].as<double>() : 0.1;
+  pnp_max_distance_m_ =
+    yaml["pnp_max_distance_m"] ? yaml["pnp_max_distance_m"].as<double>() : 30.0;
+  if (!std::isfinite(pnp_max_reprojection_error_px_) ||
+      !std::isfinite(pnp_min_distance_m_) || !std::isfinite(pnp_max_distance_m_) ||
+      pnp_max_reprojection_error_px_ <= 0.0 || pnp_min_distance_m_ <= 0.0 ||
+      pnp_max_distance_m_ <= pnp_min_distance_m_) {
+    throw std::runtime_error("Invalid PnP validation configuration");
+  }
 }
 
 Eigen::Matrix3d Solver::R_gimbal2world() const { return R_gimbal2world_; }
@@ -58,21 +74,70 @@ void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
 }
 
-//solvePnP（获得姿态）
-void Solver::solve(Armor & armor) const
+// solvePnP（获得姿态），并在位姿进入 Tracker 前完成质量检查。
+bool Solver::solve(Armor & armor) const
 {
+  armor.pnp_valid = false;
+  armor.pnp_reprojection_error_px = std::numeric_limits<double>::infinity();
+
   const auto & object_points =
     (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
 
+  if (armor.points.size() != object_points.size()) {
+    tools::logger()->debug(
+      "[PnP] reject: expected {} image points, got {}", object_points.size(), armor.points.size());
+    return false;
+  }
+  for (const auto & point : armor.points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      tools::logger()->debug("[PnP] reject: non-finite image point");
+      return false;
+    }
+  }
+
   cv::Vec3d rvec, tvec;
-  cv::solvePnP(
-    object_points, armor.points, camera_matrix_, distort_coeffs_, rvec, tvec, false,
-    cv::SOLVEPNP_IPPE);
+  try {
+    const bool solved = cv::solvePnP(
+      object_points, armor.points, camera_matrix_, distort_coeffs_, rvec, tvec, false,
+      cv::SOLVEPNP_IPPE);
+    if (!solved || !cv::checkRange(rvec) || !cv::checkRange(tvec)) {
+      tools::logger()->debug("[PnP] reject: solvePnP failed or returned non-finite pose");
+      return false;
+    }
+  } catch (const cv::Exception & e) {
+    tools::logger()->debug("[PnP] reject: OpenCV exception: {}", e.what());
+    return false;
+  }
+
+  const double camera_distance = cv::norm(tvec);
+  if (tvec[2] <= 0.0 || !std::isfinite(camera_distance) ||
+      camera_distance < pnp_min_distance_m_ || camera_distance > pnp_max_distance_m_) {
+    tools::logger()->debug(
+      "[PnP] reject: depth={:.3f}m distance={:.3f}m valid_range=[{:.3f}, {:.3f}]m",
+      tvec[2], camera_distance, pnp_min_distance_m_, pnp_max_distance_m_);
+    return false;
+  }
+
+  const double reprojection_error =
+    pnp_reprojection_error(object_points, armor.points, rvec, tvec);
+  if (!std::isfinite(reprojection_error) ||
+      reprojection_error > pnp_max_reprojection_error_px_) {
+    tools::logger()->debug(
+      "[PnP] reject: reprojection_rmse={:.3f}px threshold={:.3f}px",
+      reprojection_error, pnp_max_reprojection_error_px_);
+    return false;
+  }
 
   Eigen::Vector3d xyz_in_camera;
   cv::cv2eigen(tvec, xyz_in_camera);
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
   armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
+
+  if (!xyz_in_camera.allFinite() || !armor.xyz_in_gimbal.allFinite() ||
+      !armor.xyz_in_world.allFinite()) {
+    tools::logger()->debug("[PnP] reject: transformed position is non-finite");
+    return false;
+  }
 
   // ===== 打印PnP解算结果 =====
   // tools::logger()->info(
@@ -97,14 +162,63 @@ void Solver::solve(Armor & armor) const
   armor.ypr_in_world = tools::eulers(R_armor2world, 2, 1, 0);
 
   armor.ypd_in_world = tools::xyz2ypd(armor.xyz_in_world);
+  if (!armor.ypr_in_gimbal.allFinite() || !armor.ypr_in_world.allFinite() ||
+      !armor.ypd_in_world.allFinite()) {
+    tools::logger()->debug("[PnP] reject: transformed orientation is non-finite");
+    return false;
+  }
+
+  armor.yaw_raw = armor.ypr_in_world[0];
+  armor.pnp_reprojection_error_px = reprojection_error;
 
   // 平衡不做yaw优化，因为pitch假设不成立
   auto is_balance = (armor.type == ArmorType::big) &&
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
                      armor.name == ArmorName::five);
-  if (is_balance) return;
+  if (is_balance) {
+    armor.pnp_valid = true;
+    return true;
+  }
 
   optimize_yaw(armor);
+  if (!std::isfinite(armor.ypr_in_world[0])) {
+    tools::logger()->debug("[PnP] reject: optimized yaw is non-finite");
+    return false;
+  }
+  armor.pnp_valid = true;
+  return true;
+}
+
+double Solver::pnp_reprojection_error(
+  const std::vector<cv::Point3f> & object_points,
+  const std::vector<cv::Point2f> & image_points,
+  const cv::Vec3d & rvec,
+  const cv::Vec3d & tvec) const
+{
+  if (object_points.empty() || object_points.size() != image_points.size()) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  std::vector<cv::Point2f> projected_points;
+  try {
+    cv::projectPoints(
+      object_points, rvec, tvec, camera_matrix_, distort_coeffs_, projected_points);
+  } catch (const cv::Exception &) {
+    return std::numeric_limits<double>::infinity();
+  }
+  if (projected_points.size() != image_points.size()) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  double squared_error_sum = 0.0;
+  for (std::size_t i = 0; i < image_points.size(); ++i) {
+    if (!std::isfinite(projected_points[i].x) || !std::isfinite(projected_points[i].y)) {
+      return std::numeric_limits<double>::infinity();
+    }
+    const double error = cv::norm(image_points[i] - projected_points[i]);
+    squared_error_sum += error * error;
+  }
+  return std::sqrt(squared_error_sum / static_cast<double>(image_points.size()));
 }
 
 std::vector<cv::Point2f> Solver::reproject_armor(
@@ -148,30 +262,12 @@ std::vector<cv::Point2f> Solver::reproject_armor(
 
 double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
 {
-  // solve
+  if (!solve(armor)) {
+    return std::numeric_limits<double>::infinity();
+  }
+
   const auto & object_points =
     (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
-
-  cv::Vec3d rvec, tvec;
-  cv::solvePnP(
-    object_points, armor.points, camera_matrix_, distort_coeffs_, rvec, tvec, false,
-    cv::SOLVEPNP_IPPE);
-
-  Eigen::Vector3d xyz_in_camera;
-  cv::cv2eigen(tvec, xyz_in_camera);
-  armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
-  armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
-
-  cv::Mat rmat;
-  cv::Rodrigues(rvec, rmat);
-  Eigen::Matrix3d R_armor2camera;
-  cv::cv2eigen(rmat, R_armor2camera);
-  Eigen::Matrix3d R_armor2gimbal = R_camera2gimbal_ * R_armor2camera;
-  Eigen::Matrix3d R_armor2world = R_gimbal2world_ * R_armor2gimbal;
-  armor.ypr_in_gimbal = tools::eulers(R_armor2gimbal, 2, 1, 0);
-  armor.ypr_in_world = tools::eulers(R_armor2world, 2, 1, 0);
-
-  armor.ypd_in_world = tools::xyz2ypd(armor.xyz_in_world);
 
   auto yaw = armor.ypr_in_world[0];
   auto xyz_in_world = armor.xyz_in_world;
@@ -208,9 +304,15 @@ double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
   std::vector<cv::Point2f> image_points;
   cv::projectPoints(object_points, _rvec, _tvec, camera_matrix_, distort_coeffs_, image_points);
 
-  auto error = 0.0;
-  for (int i = 0; i < 4; i++) error += cv::norm(armor.points[i] - image_points[i]);
-  return error;
+  if (image_points.size() != armor.points.size()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  auto squared_error_sum = 0.0;
+  for (std::size_t i = 0; i < armor.points.size(); ++i) {
+    const double error = cv::norm(armor.points[i] - image_points[i]);
+    squared_error_sum += error * error;
+  }
+  return std::sqrt(squared_error_sum / static_cast<double>(armor.points.size()));
 }
 
 void Solver::optimize_yaw(Armor & armor) const
@@ -233,7 +335,6 @@ void Solver::optimize_yaw(Armor & armor) const
     }
   }
 
-  armor.yaw_raw = armor.ypr_in_world[0];
   armor.ypr_in_world[0] = best_yaw;
 }
 
@@ -275,8 +376,17 @@ double Solver::armor_reprojection_error(
   const Armor & armor, double yaw, const double & inclined) const
 {
   auto image_points = reproject_armor(armor.xyz_in_world, yaw, armor.type, armor.name);
+  if (image_points.size() != armor.points.size()) {
+    return std::numeric_limits<double>::infinity();
+  }
   auto error = 0.0;
-  for (int i = 0; i < 4; i++) error += cv::norm(armor.points[i] - image_points[i]);
+  for (std::size_t i = 0; i < armor.points.size(); ++i) {
+    const double point_error = cv::norm(armor.points[i] - image_points[i]);
+    if (!std::isfinite(point_error)) {
+      return std::numeric_limits<double>::infinity();
+    }
+    error += point_error;
+  }
   // auto error = SJTU_cost(image_points, armor.points, inclined);
 
   return error;

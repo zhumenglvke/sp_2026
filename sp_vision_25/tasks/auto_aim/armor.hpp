@@ -2,6 +2,7 @@
 #define AUTO_AIM__ARMOR_HPP
 
 #include <Eigen/Dense>
+#include <limits>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
@@ -105,6 +106,10 @@ struct Armor
   Eigen::Vector3d ypd_in_world;   // 球坐标系
 
   double yaw_raw;  // rad
+
+  // PnP 质量信息。只有 pnp_valid 为 true 的观测才允许进入 Tracker/EKF。
+  bool pnp_valid{false};
+  double pnp_reprojection_error_px{std::numeric_limits<double>::infinity()};
 
   Armor(const Lightbar & left, const Lightbar & right);
   Armor(

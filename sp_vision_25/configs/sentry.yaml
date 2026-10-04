@@ -69,6 +69,11 @@ outpost_max_temp_lost_count: 75
 association_position_gate_m: 0.4  # 观测板与预测板的三维位置误差上限，米
 association_yaw_gate_deg: 45.0    # 装甲板朝向误差上限，度
 
+#####-----PnP质量门限-----#####
+pnp_max_reprojection_error_px: 8.0  # PnP四角点重投影RMSE上限，像素
+pnp_min_distance_m: 0.1             # PnP有效距离下限，米
+pnp_max_distance_m: 30.0            # PnP有效距离上限，米
+
 #####-----aimer参数-----#####
 yaw_offset: -0.8 # degree -2.5
 pitch_offset: -1  # degree 2
@@ -79,6 +84,8 @@ right_yaw_offset: -0.6
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.026 # s
 low_speed_delay_time: 0.010 # s
+prediction_max_iterations: 10       # 飞行时间与未来命中面联合迭代上限
+fly_time_convergence_ms: 1.0        # 相邻两次飞行时间收敛门限，毫秒
 
 #####-----shooter参数-----#####
 first_tolerance: 5 # 近距离射击容差，degree

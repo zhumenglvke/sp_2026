@@ -207,6 +207,10 @@ association_yaw_gate_deg: 45.0    # 装甲板朝向差上限，度
 
 此门限只作用于已有目标的观测关联；目标处于 `lost` 时，`set_target()` 仍按原有规则初始化。前摄未通过关联门限但检测列表非空时，`front_has_detection` 仍可能为真；要确保暂时丢失目标时不继续开火，运行配置应保持 `tracking_only_fire: true`。
 
+### PnP 与未来命中面优化
+
+`Solver::solve()` 会在位姿进入 Tracker 前检查角点、求解返回值、有限性、正深度、距离范围和四角点重投影 RMSE。Aimer 将子弹到达时选中的物理装甲面保存为 `ShotCandidate`；飞行时间与装甲面编号没有同时收敛时，云台仍可跟随，但 Shooter 不允许开火。配置、调参方法和修改位置见 [`OPTIMIZATION_NOTES_20261004.md`](OPTIMIZATION_NOTES_20261004.md)。
+
 ## 9. 编译方法
 
 本项目使用 zsh。首先进入工作空间并加载 ROS 2 环境：
